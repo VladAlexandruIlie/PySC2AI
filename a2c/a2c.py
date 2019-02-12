@@ -12,12 +12,11 @@ from baselines.a2c.utils import Scheduler, find_trainable_variables
 from baselines.a2c.utils import cat_entropy
 # from a2c import kfac
 
-from pysc2.env import environment
 from pysc2.lib import actions as sc2_actions
 
 from common import common
 
-import nsml
+from resources import nsml
 
 _CONTROL_GROUP_RECALL = 0
 _NOT_QUEUED = 0
