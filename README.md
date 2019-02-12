@@ -6,13 +6,6 @@ This example program was built on
 - s2client-proto (Blizzard) [https://github.com/Blizzard/s2client-proto]
 - Tensorflow 1.3 (Google) [https://github.com/tensorflow/tensorflow]
 
-# Current examples
-
-## Minimaps
-- CollectMineralShards with Deep Q Network
-
-![CollectMineralShards](https://media.giphy.com/media/UrgVK9TFfv2AE/giphy.gif "Collect Mineral")
-
 # Quick Start Guide
 
 ## 1. Get PySC2

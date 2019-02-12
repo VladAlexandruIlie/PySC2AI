@@ -1,3 +1,6 @@
 .idea
 *.pyc
+/resources/modesl/*
+/resources/replays/*
+/resources/tensorboard/*
 tensorboard

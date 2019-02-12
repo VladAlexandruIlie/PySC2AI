@@ -3,12 +3,8 @@ import sys
 import os
 
 from absl import flags
-from baselines import deepq
-from pysc2.env import sc2_env
 from pysc2.lib import actions
 
-from pysc2.env import environment
-import numpy as np
 import datetime
 
 from common.vec_env.subproc_vec_env import SubprocVecEnv
@@ -17,10 +13,8 @@ from a2c import a2c
 from baselines.logger import Logger, TensorBoardOutputFormat, HumanOutputFormat
 
 import random
-import threading
-import time
 
-import nsml
+from resources import nsml
 
 _MOVE_SCREEN = actions.FUNCTIONS.Move_screen.id
 _SELECT_ARMY = actions.FUNCTIONS.select_army.id
