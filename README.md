@@ -28,7 +28,7 @@ $ pip install git+https://github.com/openai/baselines
 
 ### Mac / Win
 
-You have to purchase StarCraft II and install it. Or even the Starter Edition will work.
+You have to purchase StarCraft II and install it or use the Starter Edition.
 
 http://us.battle.net/sc2/en/legacy-of-the-void/
 
@@ -58,14 +58,7 @@ $ python train_mineral_shards.py --algorithm=a2c
 $ python enjoy_mineral_shards.py
 ```
 
-## 4-1. Train it with DQN
-
-```shell
-$ python train_mineral_shards.py --algorithm=deepq --prioritized=True --dueling=True --timesteps=2000000 --exploration_fraction=0.2
-```
-
-
-## 4-2. Train it with A2C(A3C)
+## 6. Train it with A2C(A3C)
 
 ```shell
 $ python train_mineral_shards.py --algorithm=a2c --num_agents=2 --num_scripts=2 --timesteps=2000000

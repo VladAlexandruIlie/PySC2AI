@@ -59,24 +59,17 @@ def main():
     print("random lr : %s" % FLAGS.lr)
     lr_round = round(FLAGS.lr, 8)
 
-    logdir = "tensorboard"
-
     if FLAGS.algorithm == "a2c":
-        logdir = "tensorboard/mineral/%s/%s_n%s_s%s_nsteps%s/lr%s/%s" % (
-            FLAGS.algorithm, FLAGS.timesteps,
-            FLAGS.num_agents + FLAGS.num_scripts, FLAGS.num_scripts,
+        logdir = "resources/tensorboard/%s_n%s_s%s_nsteps%s/lr%s/%s" % (
+            FLAGS.timesteps, FLAGS.num_agents + FLAGS.num_scripts, FLAGS.num_scripts,
             FLAGS.nsteps, lr_round, start_time)
+        print(logdir)
 
     if FLAGS.log == "tensorboard":
         Logger.DEFAULT \
             = Logger.CURRENT \
             = Logger(dir=None,
                      output_formats=[TensorBoardOutputFormat(logdir)])
-    elif FLAGS.log == "stdout":
-        Logger.DEFAULT \
-            = Logger.CURRENT \
-            = Logger(dir=None,
-                     output_formats=[HumanOutputFormat(sys.stdout)])
 
     if FLAGS.algorithm == "a2c":
         num_timesteps = int(40e6)
@@ -101,20 +94,16 @@ def main():
 
 def a2c_callback(locals, globals):
     global max_mean_reward, last_filename
-    # pprint.pprint(locals)
+    # print(locals)
 
     if ('mean_100ep_reward' in locals and locals['num_episodes'] >= 10
             and locals['mean_100ep_reward'] > max_mean_reward):
         print("mean_100ep_reward : %s max_mean_reward : %s" %
               (locals['mean_100ep_reward'], max_mean_reward))
 
-        if (not os.path.exists(os.path.join(PROJ_DIR, 'models/a2c/'))):
+        if (not os.path.exists(os.path.join(PROJ_DIR, 'resources/models/a2c/'))):
             try:
-                os.mkdir(os.path.join(PROJ_DIR, 'models/'))
-            except Exception as e:
-                print(str(e))
-            try:
-                os.mkdir(os.path.join(PROJ_DIR, 'models/a2c/'))
+                os.mkdir(os.path.join(PROJ_DIR, 'resources/models/'))
             except Exception as e:
                 print(str(e))
 
@@ -127,7 +116,7 @@ def a2c_callback(locals, globals):
 
         filename = os.path.join(
             PROJ_DIR,
-            'models/a2c/mineral_%s.pkl' % locals['mean_100ep_reward'])
+            'resources/models/mineral_%s.pkl' % locals['mean_100ep_reward'])
         model.save(filename)
         print("save best mean_100ep_reward model to %s" % filename)
         last_filename = filename

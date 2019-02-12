@@ -68,10 +68,8 @@ class Model(object):
         PG_LR = tf.placeholder(tf.float32, [])
         VF_LR = tf.placeholder(tf.float32, [])
 
-        self.model = step_model = policy(
-            sess, ob_space, ac_space, nenvs, 1, nstack, reuse=False)
-        self.model2 = train_model = policy(
-            sess, ob_space, ac_space, nenvs, nsteps, nstack, reuse=True)
+        self.model = step_model = policy(sess, ob_space, ac_space, nenvs, 1, nstack, reuse=False)
+        self.model2 = train_model = policy(sess, ob_space, ac_space, nenvs, nsteps, nstack, reuse=True)
 
         # Policy 1 : Base Action : train_model.pi label = A
 
@@ -153,8 +151,7 @@ class Model(object):
         if max_grad_norm is not None:
             grads, _ = tf.clip_by_global_norm(grads, max_grad_norm)
         grads = list(zip(grads, params))
-        trainer = tf.train.RMSPropOptimizer(
-            learning_rate=lr, decay=alpha, epsilon=epsilon)
+        trainer = tf.train.RMSPropOptimizer(learning_rate=lr, decay=alpha, epsilon=epsilon)
         _train = trainer.apply_gradients(grads)
 
         self.logits = logits = train_model.pi
@@ -525,9 +522,7 @@ class Runner(object):
             # print("final acitons : ", actions)
             obs, rewards, dones, \
             available_actions, army_counts, \
-            control_groups, selected, xy_per_marine \
-                = self.env.step(
-                actions=actions)
+            control_groups, selected, xy_per_marine = self.env.step(actions=actions)
             self.army_counts = army_counts
             self.control_groups = control_groups
             self.selected = selected
@@ -624,8 +619,7 @@ class Runner(object):
         return mb_obs, mb_states, mb_td_targets, mb_masks, \
                mb_base_actions, mb_xy0, mb_xy1, mb_values
 
-
-def learn(policy,
+def test (policy,
           env,
           seed,
           total_timesteps=int(40e6),
@@ -641,7 +635,7 @@ def learn(policy,
           lr=0.25,
           max_grad_norm=0.01,
           kfac_clip=0.001,
-          save_interval=None,
+          save_interval=100,
           lrschedule='linear',
           callback=None):
     tf.reset_default_graph()
@@ -668,6 +662,7 @@ def learn(policy,
         import cloudpickle
         with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
             fh.write(cloudpickle.dumps(make_model))
+
     model = make_model()
     print("make_model complete!")
     runner = Runner(
@@ -736,8 +731,127 @@ def learn(policy,
             logger.record_tabular("explained_variance", float(ev))
             logger.dump_tabular()
 
-        if save_interval and (update % save_interval == 0
-                              or update == 1) and logger.get_dir():
+        if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir():
+            savepath = osp.join(logger.get_dir(), 'checkpoint%.5i' % update)
+            print('Saving to', savepath)
+            model.save(savepath)
+
+    env.close()
+
+
+def learn(policy,
+          env,
+          seed,
+          total_timesteps=int(40e6),
+          gamma=0.99,
+          log_interval=1,
+          nprocs=24,
+          nscripts=12,
+          nsteps=20,
+          nstack=4,
+          ent_coef=0.01,
+          vf_coef=0.5,
+          vf_fisher_coef=1.0,
+          lr=0.25,
+          max_grad_norm=0.01,
+          kfac_clip=0.001,
+          save_interval=10,
+          lrschedule='linear',
+          callback=None):
+    tf.reset_default_graph()
+    set_global_seeds(seed)
+
+    nenvs = nprocs
+    ob_space = (32, 32, 3)  # env.observation_space
+    ac_space = (32, 32)
+    make_model = lambda: Model(policy, ob_space, ac_space, nenvs,
+                               total_timesteps,
+                               nprocs=nprocs,
+                               nscripts=nscripts,
+                               nsteps=nsteps,
+                               nstack=nstack,
+                               ent_coef=ent_coef,
+                               vf_coef=vf_coef,
+                               vf_fisher_coef=vf_fisher_coef,
+                               lr=lr,
+                               max_grad_norm=max_grad_norm,
+                               kfac_clip=kfac_clip,
+                               lrschedule=lrschedule)
+
+    if save_interval and logger.get_dir():
+        import cloudpickle
+        with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
+            fh.write(cloudpickle.dumps(make_model))
+    model = make_model()
+    print("make_model complete!")
+    runner = Runner(
+        env,
+        model,
+        nsteps=nsteps,
+        nscripts=nscripts,
+        nstack=nstack,
+        gamma=gamma,
+        callback=callback)
+    nbatch = nenvs * nsteps
+    tstart = time.time()
+    # enqueue_threads = model.q_runner.create_threads(model.sess, coord=tf.train.Coordinator(), start=True)
+    for update in range(1, total_timesteps // nbatch + 1):
+        obs, states, td_targets, masks, actions, xy0, xy1, values = runner.run()
+
+        policy_loss, value_loss, policy_entropy, \
+        policy_loss_xy0, policy_entropy_xy0, \
+        policy_loss_xy1, policy_entropy_xy1, \
+            = model.train(obs, states, td_targets,
+                          masks, actions,
+                          xy0, xy1, values)
+
+        model.old_obs = obs
+        nseconds = time.time() - tstart
+        fps = int((update * nbatch) / nseconds)
+
+        if update % log_interval == 0 or update == 1:
+            ev = explained_variance(values, td_targets)
+            nsml.report(
+                nupdates=update,
+                total_timesteps=update * nbatch,
+                fps=fps,
+                policy_entropy=float(policy_entropy),
+                policy_loss=float(policy_loss),
+
+                policy_loss_xy0=float(policy_loss_xy0),
+                policy_entropy_xy0=float(policy_entropy_xy0),
+
+                policy_loss_xy1=float(policy_loss_xy1),
+                policy_entropy_xy1=float(policy_entropy_xy1),
+
+                value_loss=float(value_loss),
+                explained_variance=float(ev),
+
+                batch_size=nbatch,
+                step=update,
+
+                scope=locals()
+                )
+            logger.record_tabular("nupdates", update)
+            logger.record_tabular("total_timesteps", update * nbatch)
+            logger.record_tabular("fps", fps)
+            logger.record_tabular("policy_entropy", float(policy_entropy))
+            logger.record_tabular("policy_loss", float(policy_loss))
+
+            logger.record_tabular("policy_loss_xy0", float(policy_loss_xy0))
+            logger.record_tabular("policy_entropy_xy0",
+                                  float(policy_entropy_xy0))
+            logger.record_tabular("policy_loss_xy1", float(policy_loss_xy1))
+            logger.record_tabular("policy_entropy_xy1",
+                                  float(policy_entropy_xy1))
+            # logger.record_tabular("policy_loss_y0", float(policy_loss_y0))
+            # logger.record_tabular("policy_entropy_y0", float(policy_entropy_y0))
+
+            logger.record_tabular("value_loss", float(value_loss))
+            logger.record_tabular("explained_variance", float(ev))
+            logger.dump_tabular()
+
+        if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir():
             savepath = osp.join(logger.get_dir(), 'checkpoint%.5i' % update)
             print('Saving to', savepath)
             model.save(savepath)

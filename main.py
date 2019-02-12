@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import pprint
 import sys
 import os
 
@@ -68,23 +69,14 @@ def main():
     logdir = "tensorboard"
 
     if FLAGS.algorithm == "a2c":
-        logdir = "tensorboard/mineral/%s/%s_n%s_s%s_nsteps%s/lr%s/%s" % (
-            FLAGS.algorithm, FLAGS.timesteps,
-            FLAGS.num_agents + FLAGS.num_scripts, FLAGS.num_scripts,
-            FLAGS.nsteps, lr_round, start_time)
+        logdir = "resources/tensorboard/%s_n%s_s%s_nsteps%s/lr%s/%s" % (
+            FLAGS.timesteps, FLAGS.num_agents + FLAGS.num_scripts, FLAGS.num_scripts, FLAGS.nsteps, lr_round, start_time)
 
     logdir = os.path.join(PROJ_DIR, logdir)
     if FLAGS.log == "tensorboard":
         Logger.DEFAULT \
             = Logger.CURRENT \
-            = Logger(dir=None,
-                     output_formats=[TensorBoardOutputFormat(logdir)])
-
-    elif FLAGS.log == "stdout":
-        Logger.DEFAULT \
-            = Logger.CURRENT \
-            = Logger(dir=None,
-                     output_formats=[HumanOutputFormat(sys.stdout)])
+            = Logger(dir=None, output_formats=[TensorBoardOutputFormat(logdir)])
 
     if FLAGS.algorithm == "a2c":
         num_timesteps = int(40e6)
