@@ -62,9 +62,8 @@ def main():
     logdir = "tensorboard"
 
     if FLAGS.algorithm == "a2c":
-        logdir = "tensorboard/mineral/%s/%s_n%s_s%s_nsteps%s/lr%s/%s" % (
-            FLAGS.algorithm, FLAGS.timesteps,
-            FLAGS.num_agents + FLAGS.num_scripts, FLAGS.num_scripts,
+        logdir = "resources/tensorboard/%s_n%s_s%s_nsteps%s/lr%s/%s" % (
+            FLAGS.timesteps, FLAGS.num_agents + FLAGS.num_scripts, FLAGS.num_scripts,
             FLAGS.nsteps, lr_round, start_time)
 
     if FLAGS.log == "tensorboard":
@@ -108,13 +107,9 @@ def a2c_callback(locals, globals):
         print("mean_100ep_reward : %s max_mean_reward : %s" %
               (locals['mean_100ep_reward'], max_mean_reward))
 
-        if (not os.path.exists(os.path.join(PROJ_DIR, 'models/a2c/'))):
+        if (not os.path.exists(os.path.join(PROJ_DIR, 'resources/models/a2c/'))):
             try:
-                os.mkdir(os.path.join(PROJ_DIR, 'models/'))
-            except Exception as e:
-                print(str(e))
-            try:
-                os.mkdir(os.path.join(PROJ_DIR, 'models/a2c/'))
+                os.mkdir(os.path.join(PROJ_DIR, 'resources/models/'))
             except Exception as e:
                 print(str(e))
 
@@ -127,7 +122,7 @@ def a2c_callback(locals, globals):
 
         filename = os.path.join(
             PROJ_DIR,
-            'models/a2c/mineral_%s.pkl' % locals['mean_100ep_reward'])
+            'resources/models/mineral_%s.pkl' % locals['mean_100ep_reward'])
         model.save(filename)
         print("save best mean_100ep_reward model to %s" % filename)
         last_filename = filename
