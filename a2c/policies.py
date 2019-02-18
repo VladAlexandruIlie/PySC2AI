@@ -57,12 +57,10 @@ class CnnPolicy(object):
       with tf.variable_scope("pi1", reuse=reuse):
         h3 = conv_to_fc(h2)  # 131072
         h4 = fc(h3, 'fc1', nh=256, init_scale=np.sqrt(2))  # ?, 256
-        pi_ = fc(
-            h4, 'pi', nact)  # ( nenv * nsteps, 524) # ?, 524
+        pi_ = fc(h4, 'pi', nact)  # ( nenv * nsteps, 524) # ?, 524
         pi = tf.nn.softmax(pi_)
 
-        vf = fc(
-            h4, 'v', 1)  # ( nenv * nsteps, 1) # ?, 1
+        vf = fc(h4, 'v', 1)  # ( nenv * nsteps, 1) # ?, 1
 
       # vf = tf.nn.l2_normalize(vf_, 1)
 
@@ -87,12 +85,12 @@ class CnnPolicy(object):
     self.initial_state = []  #not stateful
 
     def step(ob, *_args, **_kwargs):
-      #obs, states, rewards, masks, actions, actions2, x1, y1, x2, y2, values
-      _pi1, _xy0, _xy1, _v = sess.run([pi, pi_xy0, pi_xy1, v0], {X: ob})
-      return _pi1, _xy0, _xy1, _v, []  #dummy state
+        # obs, states, rewards, masks, actions, actions2, x1, y1, x2, y2, values
+        pi1, _xy0, _xy1, _v = sess.run([pi, pi_xy0, pi_xy1, v0], {X: ob})
+        return pi1, _xy0, _xy1, _v, []  #dummy state
 
     def value(ob, *_args, **_kwargs):
-      return sess.run(v0, {X: ob})
+        return sess.run(v0, {X: ob})
 
     self.X = X
     self.pi = pi

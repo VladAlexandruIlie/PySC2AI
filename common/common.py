@@ -4,8 +4,7 @@ from pysc2.lib import actions as sc2_actions
 from pysc2.lib import features
 from pysc2.lib import actions
 
-import random
-from mineral.tsp2 import multistart_localsearch, mk_matrix, distL2
+from extra.mineral.tsp2 import multistart_localsearch, mk_matrix, distL2
 
 _PLAYER_RELATIVE = features.SCREEN_FEATURES.player_relative.index
 

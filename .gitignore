@@ -1,6 +1,5 @@
 .idea
 *.pyc
-/resources/models/*
-/resources/replays/*
-/resources/tensorboard/*
+/experiments/*
+/extra/*
 tensorboard

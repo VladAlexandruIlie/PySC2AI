@@ -1,31 +1,31 @@
+import os
 import os.path as osp
 import time
+import tabulate
 import joblib
 import numpy as np
 import tensorflow as tf
 from baselines import logger
-
-from baselines.common import set_global_seeds, explained_variance
-
-from baselines.a2c.utils import discount_with_dones
 from baselines.a2c.utils import Scheduler, find_trainable_variables
 from baselines.a2c.utils import cat_entropy
-# from a2c import kfac
-
+from baselines.a2c.utils import discount_with_dones
+from baselines.common import set_global_seeds, explained_variance
 from pysc2.lib import actions as sc2_actions
 
-from common import common
-
-from resources import nsml
+from common import common, nsml
+import re
 
 _CONTROL_GROUP_RECALL = 0
 _NOT_QUEUED = 0
 
 
-# np.set_printoptions(threshold=np.inf)
-
 def mse(pred, target):
     return tf.square(pred - target) / 2.
+
+
+def extract_number(f):
+    s = re.findall("\d+$", f)
+    return int(s[0]) if s else -1, f
 
 
 class Model(object):
@@ -52,8 +52,11 @@ class Model(object):
             allow_soft_placement=True,
             intra_op_parallelism_threads=nprocs,
             inter_op_parallelism_threads=nprocs)
+
         config.gpu_options.allow_growth = True
+
         self.sess = sess = tf.Session(config=config)
+
         nsml.bind(sess=sess)
         # nact = ac_space.n
         nbatch = nenvs * nsteps
@@ -151,6 +154,11 @@ class Model(object):
         if max_grad_norm is not None:
             grads, _ = tf.clip_by_global_norm(grads, max_grad_norm)
         grads = list(zip(grads, params))
+
+        # Summarize all gradients
+        for grad, var in grads:
+            tf.summary.histogram(var.name + '/gradient', grad)
+
         trainer = tf.train.RMSPropOptimizer(learning_rate=lr, decay=alpha, epsilon=epsilon)
         _train = trainer.apply_gradients(grads)
 
@@ -228,6 +236,7 @@ class Model(object):
         def save(save_path):
             ps = sess.run(params)
             joblib.dump(ps, save_path)
+            print(">> model updated at " + save_path)
 
         def load(load_path):
             loaded_params = joblib.load(load_path)
@@ -235,6 +244,7 @@ class Model(object):
             for p, loaded_p in zip(params, loaded_params):
                 restores.append(p.assign(loaded_p))
             sess.run(restores)
+            print(">> model loaded from " + load_path)
 
         self.train = train
         self.save = save
@@ -244,9 +254,12 @@ class Model(object):
         self.step = step_model.step
         self.value = step_model.value
         self.initial_state = step_model.initial_state
-        print("global_variables_initializer start")
+        print(">> global_variables_initializer start")
         tf.global_variables_initializer().run(session=sess)
-        print("global_variables_initializer complete")
+        print(">> global_variables_initializer complete")
+        self.saver = tf.train.Saver(max_to_keep=1)
+
+        # merged = tf.summary.merge_all()
 
 
 class Runner(object):
@@ -269,8 +282,7 @@ class Runner(object):
         self.obs = np.zeros((nenv, nh, nw, nc * nstack), dtype=np.uint8)
         self.available_actions = None
         self.base_act_mask = np.full((self.nenv, 2), 0, dtype=np.uint8)
-        obs, rewards, dones, available_actions, army_counts, control_groups, selected, xy_per_marine = env.reset(
-        )
+        obs, rewards, dones, available_actions, army_counts, control_groups, selected, xy_per_marine = env.reset()
         self.xy_per_marine = [{"0": [0, 0], "1": [0, 0]} for _ in range(nenv)]
         for env_num, data in enumerate(xy_per_marine):
             self.xy_per_marine[env_num] = data
@@ -441,8 +453,7 @@ class Runner(object):
         mb_states = self.states
         for n in range(self.nsteps):
             # pi, pi2, x1, y1, x2, y2, v0
-            pi1, pi_xy0, pi_xy1, values, states = self.model.step(
-                self.obs, self.states, self.dones)
+            pi1, pi_xy0, pi_xy1, values, states = self.model.step(self.obs, self.states, self.dones)
 
             pi1_noise = np.random.random_sample((self.nenv, 3)) * 0.3
 
@@ -523,16 +534,17 @@ class Runner(object):
             obs, rewards, dones, \
             available_actions, army_counts, \
             control_groups, selected, xy_per_marine = self.env.step(actions=actions)
+
             self.army_counts = army_counts
             self.control_groups = control_groups
             self.selected = selected
             for env_num, data in enumerate(xy_per_marine):
                 self.xy_per_marine[env_num] = data
             self.update_available(available_actions)
-
             self.states = states
             self.dones = dones
             mean_100ep_reward_a2c = 0
+
             for n, done in enumerate(dones):
                 self.total_reward[n] += float(rewards[n])
                 if done:
@@ -542,39 +554,54 @@ class Runner(object):
                     self.episode_rewards.append(self.total_reward[n])
 
                     model = self.model
-                    mean_100ep_reward = round(
-                        np.mean(self.episode_rewards[-101:]), 1)
-                    if (n < self.nscripts):  # scripted agents
-                        self.episode_rewards_script.append(
-                            self.total_reward[n])
-                        mean_100ep_reward_script = round(
-                            np.mean(self.episode_rewards_script[-101:]), 1)
-                        nsml.report(
-                            reward_script=self.total_reward[n],
-                            mean_reward_script=mean_100ep_reward_script,
-                            reward=self.total_reward[n],
-                            mean_100ep_reward=mean_100ep_reward,
-                            episodes=self.episodes,
-                            step=self.episodes,
-                            scope=locals()
-                        )
-                    else:
-                        self.episode_rewards_a2c.append(self.total_reward[n])
-                        mean_100ep_reward_a2c = round(
-                            np.mean(self.episode_rewards_a2c[-101:]), 1)
-                        nsml.report(
-                            reward_a2c=self.total_reward[n],
-                            mean_reward_a2c=mean_100ep_reward_a2c,
-                            reward=self.total_reward[n],
-                            mean_100ep_reward=mean_100ep_reward,
-                            episodes=self.episodes,
-                            step=self.episodes,
-                            scope=locals()
-                        )
-                        print("mean_100ep_reward_a2c", mean_100ep_reward_a2c)
+                    mean_100ep_reward = round(np.mean(self.episode_rewards[-101:]), 1)
+                    self.episode_rewards_a2c.append(self.total_reward[n])
+                    mean_100ep_reward_a2c = round(np.mean(self.episode_rewards_a2c[-101:]), 1)
+
+                    nsml.report(
+                        n=n,
+                        reward_a2c=self.total_reward[n],
+                        mean_reward_a2c=mean_100ep_reward_a2c,
+                        reward=self.total_reward[n],
+                        mean_100ep_reward=mean_100ep_reward,
+                        episodes=self.episodes,
+                        step=self.episodes,
+                        scope=locals()
+                    )
+
+                    pathToSummary = logger.get_dir() + "summaries/env-%i/" % (n + 1)
+
+                    # Create a summary to monitor rewards
+                    tf.summary.scalar("reward", self.total_reward[n])
+                    tf.summary.scalar("100ep_average", mean_100ep_reward)
+
+                    # Create summaries to visualize weights
+                    for var in tf.trainable_variables():
+                        tf.summary.histogram(var.name, var)
+
+                    # Merge all summaries into a single op
+                    merged_summary_op = tf.summary.merge_all()
+
+                    # save_summaries(model, pathToSummary)
+
+                    # print(pathToSummary)
+                    # print("## Env %i DONE: A: %5.2F, V: %5.2F, R: %5.1F" %
+                    #       (n + 1, mean_100ep_reward, self.total_reward[n] - mean_100ep_reward, self.total_reward[n]))
+                    # print("env %i reward : %d " % (n+1, self.total_reward[n]))
+                    # if len(self.episode_rewards_a2c) > 4:
+                    #     print("episode rewards:", self.episode_rewards_a2c[len(self.episode_rewards_a2c)-5:])
+                    # else:
+                    #     print("episode rewards:", self.episode_rewards_a2c)
+                    # print("avg 100ep reward ", mean_100ep_reward)
 
                     if self.callback is not None:
-                        self.callback(locals(), globals())
+                        self.callback(locals(), globals(),
+                                      logger,
+                                      n + 1,
+                                      mean_100ep_reward,
+                                      self.total_reward[n] - mean_100ep_reward,
+                                      self.total_reward[n])
+
                     self.total_reward[n] = 0
                     self.group_list[n] = []
 
@@ -619,125 +646,6 @@ class Runner(object):
         return mb_obs, mb_states, mb_td_targets, mb_masks, \
                mb_base_actions, mb_xy0, mb_xy1, mb_values
 
-def test (policy,
-          env,
-          seed,
-          total_timesteps=int(40e6),
-          gamma=0.99,
-          log_interval=1,
-          nprocs=24,
-          nscripts=12,
-          nsteps=20,
-          nstack=4,
-          ent_coef=0.01,
-          vf_coef=0.5,
-          vf_fisher_coef=1.0,
-          lr=0.25,
-          max_grad_norm=0.01,
-          kfac_clip=0.001,
-          save_interval=100,
-          lrschedule='linear',
-          callback=None):
-    tf.reset_default_graph()
-    set_global_seeds(seed)
-
-    nenvs = nprocs
-    ob_space = (32, 32, 3)  # env.observation_space
-    ac_space = (32, 32)
-    make_model = lambda: Model(policy, ob_space, ac_space, nenvs,
-                               total_timesteps,
-                               nprocs=nprocs,
-                               nscripts=nscripts,
-                               nsteps=nsteps,
-                               nstack=nstack,
-                               ent_coef=ent_coef,
-                               vf_coef=vf_coef,
-                               vf_fisher_coef=vf_fisher_coef,
-                               lr=lr,
-                               max_grad_norm=max_grad_norm,
-                               kfac_clip=kfac_clip,
-                               lrschedule=lrschedule)
-
-    if save_interval and logger.get_dir():
-        import cloudpickle
-        with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
-            fh.write(cloudpickle.dumps(make_model))
-
-    model = make_model()
-    print("make_model complete!")
-    runner = Runner(
-        env,
-        model,
-        nsteps=nsteps,
-        nscripts=nscripts,
-        nstack=nstack,
-        gamma=gamma,
-        callback=callback)
-    nbatch = nenvs * nsteps
-    tstart = time.time()
-    # enqueue_threads = model.q_runner.create_threads(model.sess, coord=tf.train.Coordinator(), start=True)
-    for update in range(1, total_timesteps // nbatch + 1):
-        obs, states, td_targets, masks, actions, xy0, xy1, values = runner.run()
-
-        policy_loss, value_loss, policy_entropy, \
-        policy_loss_xy0, policy_entropy_xy0, \
-        policy_loss_xy1, policy_entropy_xy1, \
-            = model.train(obs, states, td_targets,
-                          masks, actions,
-                          xy0, xy1, values)
-
-        model.old_obs = obs
-        nseconds = time.time() - tstart
-        fps = int((update * nbatch) / nseconds)
-        if update % log_interval == 0 or update == 1:
-            ev = explained_variance(values, td_targets)
-            nsml.report(
-                nupdates=update,
-                total_timesteps=update * nbatch,
-                fps=fps,
-                policy_entropy=float(policy_entropy),
-                policy_loss=float(policy_loss),
-
-                policy_loss_xy0=float(policy_loss_xy0),
-                policy_entropy_xy0=float(policy_entropy_xy0),
-
-                policy_loss_xy1=float(policy_loss_xy1),
-                policy_entropy_xy1=float(policy_entropy_xy1),
-
-                value_loss=float(value_loss),
-                explained_variance=float(ev),
-
-                batch_size=nbatch,
-                step=update,
-
-                scope=locals()
-                )
-            logger.record_tabular("nupdates", update)
-            logger.record_tabular("total_timesteps", update * nbatch)
-            logger.record_tabular("fps", fps)
-            logger.record_tabular("policy_entropy", float(policy_entropy))
-            logger.record_tabular("policy_loss", float(policy_loss))
-
-            logger.record_tabular("policy_loss_xy0", float(policy_loss_xy0))
-            logger.record_tabular("policy_entropy_xy0",
-                                  float(policy_entropy_xy0))
-            logger.record_tabular("policy_loss_xy1", float(policy_loss_xy1))
-            logger.record_tabular("policy_entropy_xy1",
-                                  float(policy_entropy_xy1))
-            # logger.record_tabular("policy_loss_y0", float(policy_loss_y0))
-            # logger.record_tabular("policy_entropy_y0", float(policy_entropy_y0))
-
-            logger.record_tabular("value_loss", float(value_loss))
-            logger.record_tabular("explained_variance", float(ev))
-            logger.dump_tabular()
-
-        if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir():
-            savepath = osp.join(logger.get_dir(), 'checkpoint%.5i' % update)
-            print('Saving to', savepath)
-            model.save(savepath)
-
-    env.close()
-
 
 def learn(policy,
           env,
@@ -757,13 +665,16 @@ def learn(policy,
           kfac_clip=0.001,
           save_interval=10,
           lrschedule='linear',
-          callback=None):
+          callback=None,
+          RLlocals=None,
+          FLAGS=None):
     tf.reset_default_graph()
     set_global_seeds(seed)
 
     nenvs = nprocs
     ob_space = (32, 32, 3)  # env.observation_space
     ac_space = (32, 32)
+
     make_model = lambda: Model(policy, ob_space, ac_space, nenvs,
                                total_timesteps,
                                nprocs=nprocs,
@@ -780,10 +691,34 @@ def learn(policy,
 
     if save_interval and logger.get_dir():
         import cloudpickle
-        with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
+
+        # list_of_files = os.listdir(osp.join(logger.get_dir(), 'models/'))
+        # if len(list_of_files) > 0:
+        #     filename = "models/%s" % (max(list_of_files, key=extract_number))
+        #
+        #     print(">> Copying %s to %s" % (logger.get_dir() + filename,
+        #                                    logger.get_dir() + "minigames_model.pkl"))
+        #
+        #     with open(osp.join(logger.get_dir(), filename), 'wb') as fh:
+        #         fh.write(cloudpickle.dumps(make_model))
+        #     # os.remove(osp.join(logger.get_dir(), filename))
+        # else:
+
+        with open(osp.join(logger.get_dir(), "minigames_model.pkl"), 'wb') as fh:
             fh.write(cloudpickle.dumps(make_model))
+
     model = make_model()
-    print("make_model complete!")
+
+    print(">> make_model complete from  @ %s!" % (osp.join(logger.get_dir(), 'minigames_model.pkl')))
+
+    # list_of_files = os.listdir(osp.join(logger.get_dir(), 'checkpoints/'))
+    # if len(list_of_files) > 0:
+    #     filename = "experiments/minigames_%i/checkpoints/%s" % \
+    #                (FLAGS.num_agents, max(list_of_files, key=extract_number))
+    #     model.load(filename)
+
+    load2(model, "experiments/minigames_%i/checkpoints/" % FLAGS.num_agents)
+
     runner = Runner(
         env,
         model,
@@ -792,10 +727,18 @@ def learn(policy,
         nstack=nstack,
         gamma=gamma,
         callback=callback)
+
     nbatch = nenvs * nsteps
     tstart = time.time()
-    # enqueue_threads = model.q_runner.create_threads(model.sess, coord=tf.train.Coordinator(), start=True)
+
+    summary_writer = tf.summary.FileWriter(logger.get_dir()+"summaries/",
+                                           graph=tf.get_default_graph())
+
     for update in range(1, total_timesteps // nbatch + 1):
+
+        # summary = model.sess.run([runner.])
+        # summary_writer.add_summary(summary, update)
+
         obs, states, td_targets, masks, actions, xy0, xy1, values = runner.run()
 
         policy_loss, value_loss, policy_entropy, \
@@ -811,6 +754,7 @@ def learn(policy,
 
         if update % log_interval == 0 or update == 1:
             ev = explained_variance(values, td_targets)
+
             nsml.report(
                 nupdates=update,
                 total_timesteps=update * nbatch,
@@ -831,29 +775,77 @@ def learn(policy,
                 step=update,
 
                 scope=locals()
-                )
-            logger.record_tabular("nupdates", update)
-            logger.record_tabular("total_timesteps", update * nbatch)
-            logger.record_tabular("fps", fps)
-            logger.record_tabular("policy_entropy", float(policy_entropy))
-            logger.record_tabular("policy_loss", float(policy_loss))
+            )
 
-            logger.record_tabular("policy_loss_xy0", float(policy_loss_xy0))
-            logger.record_tabular("policy_entropy_xy0",
-                                  float(policy_entropy_xy0))
-            logger.record_tabular("policy_loss_xy1", float(policy_loss_xy1))
-            logger.record_tabular("policy_entropy_xy1",
-                                  float(policy_entropy_xy1))
+            # pathToSummary = logger.get_dir() + "summaries/env-%i/" % env_nr
+            # # save_summaries(RLlocals['model'], pathToSummary)
+            #
+            # tf.summary.scalar("reward", reward)
+            # tf.summary.scalar("average", average)
+            # merged_summary_op = tf.summary.merge_all()
+            #
+            # summary_writer = tf.summary.FileWriter(pathToSummary, RLlocals['model'].sess.graph)
+
+            logger.record_tabular("fps", fps)
+            logger.record_tabular("total_timesteps", update * nbatch)
+            logger.record_tabular("explained_variance", float(ev))
+            logger.record_tabular("rewards", np.mean(runner.total_reward))
+
+            # logger.record_tabular("targets", np.mean(td_targets))
+            # logger.record_tabular("values", np.mean(values))
+            # logger.record_tabular("nupdates", update)
+            # logger.record_tabular("policy_entropy", float(policy_entropy))
+            # logger.record_tabular("policy_loss", float(policy_loss))
+            # logger.record_tabular("policy_loss_xy0", float(policy_loss_xy0))
+            # logger.record_tabular("policy_entropy_xy0",
+            #                       float(policy_entropy_xy0))
+            # logger.record_tabular("policy_loss_xy1", float(policy_loss_xy1))
+            # logger.record_tabular("policy_entropy_xy1",
+            #                       float(policy_entropy_xy1))
             # logger.record_tabular("policy_loss_y0", float(policy_loss_y0))
             # logger.record_tabular("policy_entropy_y0", float(policy_entropy_y0))
+            # logger.record_tabular("value_loss", float(value_loss))
 
-            logger.record_tabular("value_loss", float(value_loss))
-            logger.record_tabular("explained_variance", float(ev))
             logger.dump_tabular()
 
         if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir():
-            savepath = osp.join(logger.get_dir(), 'checkpoint%.5i' % update)
-            print('Saving to', savepath)
-            model.save(savepath)
+            # if update != save_interval:
+            #
+            #     oldCheckpointPath = osp.join(logger.get_dir(),
+            #                                  'checkpoints/checkpoint%.5i' % (update - save_interval))
+            # else:
+            #     oldCheckpointPath = osp.join(logger.get_dir(),
+            #                                  'checkpoints/checkpoint%.5i' % (update - save_interval + 1))
+            #
+            # if os.path.exists(oldCheckpointPath):
+            #     os.remove(oldCheckpointPath)
+            #
+            # savepath = osp.join(logger.get_dir(), 'checkpoints/checkpoint%.5i' % update)
+            # print('Saving to', savepath)
+            # model.save(savepath)
+            # model.save()
+            save_model(model, runner.episodes)
 
     env.close()
+
+
+def save_summaries(model, summary, path):
+    print("Saving summaries... at %s" % path)
+    writer = tf.summary.FileWriter(path, model.sess.graph)
+
+
+def save_model(model, update=0):
+    checkpoint_dir = logger.get_dir() + "checkpoints/"
+
+    print(">> Saving checkpoint @ %s -%i.data" % (checkpoint_dir, update))
+    model.saver.save(model.sess, checkpoint_dir, update)
+
+
+def load2(model, checkpoint_dir):
+    latest_checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
+    if latest_checkpoint:
+        print("Loading model checkpoint {} ...".format(latest_checkpoint))
+        model.saver.restore(model.sess, latest_checkpoint)
+        print("Checkpoint loaded")
+    else:
+        print("No checkpoints available!\n")
